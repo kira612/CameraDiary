@@ -1,0 +1,21 @@
+[Unit]
+Description=FFmpeg RTSP stream from auto-detected USB camera
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=kira
+Group=video
+Restart=always
+RestartSec=5
+Environment=RTSP_URL=rtsp://10.34.44.247:8554/cam1
+Environment=FRAMERATE=15
+Environment=VIDEO_SIZE=1280x720
+Environment=LOGLEVEL=warning
+ExecStart=/usr/local/bin/start_rtsp_stream.sh
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
