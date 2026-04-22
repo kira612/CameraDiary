@@ -1,0 +1,282 @@
+# 2026-04-21 設計メモ
+
+## 目的
+
+保育園向けのカメラ映像活用システムに向けて、まずは以下の土台を安定化した。
+
+- Raspberry Pi 側で USB カメラ映像を取得する
+- Raspberry Pi 側で FFmpeg により RTSP 配信する
+- FFmpeg 配信を systemd で常駐化する
+- Windows + WSL 側で MediaMTX を起動し、RTSP を受ける
+- Windows から WSL 上の MediaMTX を起動しやすくする
+
+今回は、何に失敗したかよりも、何を構成し、何が動くようになったかを中心に整理する。
+
+---
+
+## 現在の全体構成
+
+```text
+USB Camera
+  -> Raspberry Pi 5
+  -> FFmpeg
+  -> RTSP/TCP
+  -> Windows host (portproxy)
+  -> WSL Ubuntu
+  -> MediaMTX
+  -> ffplay / ffprobe / 今後の解析ワーカー
+```
+
+### 現時点で動作確認済みの流れ
+
+- USB カメラを Raspberry Pi で認識
+- `/dev/video0` から FFmpeg で映像取得
+- Raspberry Pi から `rtsp://10.34.44.247:8554/cam1` へ送信
+- Windows の `portproxy` で WSL の `8554` へ転送
+- WSL 上の MediaMTX で `cam1` を受信
+- WSL 側で `ffplay` / `ffprobe` により受信確認
+
+---
+
+## Raspberry Pi 側でやったこと
+
+
+### 1. systemd による常駐化
+
+Pi 側では FFmpeg 送信を systemd で常駐化した。
+
+サービス名:
+
+- `rtsp-stream.service`
+
+ユニットファイル:
+
+```ini
+[Unit]
+Description=FFmpeg RTSP stream from USB camera
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=kira
+Group=video
+Restart=always
+RestartSec=5
+ExecStart=/usr/bin/ffmpeg \
+  -loglevel warning \
+  -f v4l2 \
+  -framerate 15 \
+  -video_size 1280x720 \
+  -input_format mjpeg \
+  -i /dev/video0 \
+  -an \
+  -vf format=yuv420p \
+  -c:v libx264 \
+  -preset veryfast \
+  -tune zerolatency \
+  -g 30 \
+  -f rtsp \
+  -rtsp_transport tcp \
+  -muxdelay 0.1 \
+  rtsp://10.34.44.247:8554/cam1
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+```
+
+利用コマンド:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable rtsp-stream.service
+sudo systemctl restart rtsp-stream.service
+sudo systemctl status rtsp-stream.service
+journalctl -u rtsp-stream.service -n 50 --no-pager
+```
+
+現状、このサービスにより Pi 側の RTSP 送信を自動再起動つきで維持できる。
+
+### 2. 今後の改善方針
+
+`/dev/video0` 固定は、USB の挿し直しや機材変更で壊れやすい。
+そのため、次の方針に切り替えるのがよい。
+
+- `udevadm` で `ID_BUS=usb` のデバイスだけを対象にする
+- `v4l2-ctl` で `Video Capture` 可能なノードだけを使う
+- `MJPEG` が使えれば優先し、なければ別フォーマットへフォールバックする
+- `systemd` は `ffmpeg` を直接呼ばず、カメラ自動検出スクリプトを呼ぶ
+
+リポジトリには、そのためのサンプルとして以下を追加した。
+
+- `scripts/pi/start_rtsp_stream.sh`
+- `scripts/pi/rtsp-stream.service.example`
+
+---
+
+## Windows + WSL 側でやったこと
+
+### 1. MediaMTX の起動
+
+WSL Ubuntu 上で MediaMTX を起動し、RTSP の受け口を用意した。
+
+現時点で確認できている実体パス:
+
+```text
+/home/kirataiki/apps/mediamtx
+```
+
+MediaMTX 起動時には、少なくとも以下を確認する。
+
+- RTSP listener が `:8554`
+- HLS listener が `:8888`
+- WebRTC listener が `:8889`
+```
+
+
+## MediaMTX 起動補助の整備
+
+Windows 側から WSL 上の MediaMTX を起動しやすくするため、補助スクリプトを追加した。
+
+追加ファイル:
+
+- `scripts/start_mediamtx_wsl.bat`
+- `scripts/start_mediamtx_wsl.sh`
+
+### 役割
+
+- `.bat`
+  - Windows からダブルクリックで起動
+  - 新しい `cmd` ウィンドウを開く
+  - WSL 側スクリプトを呼ぶ
+- `.sh`
+  - WSL 側で実際に `mediamtx` を起動
+  - カレントディレクトリと実体パスを表示
+  - `stdbuf` を使ってログを流す
+
+### 現在の既定パス
+
+```text
+/home/kirataiki/apps/mediamtx
+```
+
+### 起動方法
+
+```bat
+scripts\start_mediamtx_wsl.bat
+```
+
+または必要に応じて:
+
+```bat
+scripts\start_mediamtx_wsl.bat Ubuntu /home/kirataiki/apps/mediamtx
+```
+
+### 現状の挙動
+
+- ダブルクリックで専用のコマンドウィンドウが開く
+- MediaMTX のログがそのウィンドウに流れる
+- 終了後もウィンドウは残るのでログ確認ができる
+
+---
+
+## WSL 側の Python / OpenCV 受信
+
+RTSP ストリームを今後の解析ワーカーにつなぐ前段として、OpenCV で `cam1` を読める最小スクリプトを追加した。
+
+追加ファイル:
+
+- `scripts/read_rtsp_opencv.py`
+- `requirements-wsl.txt`
+
+### 役割
+
+- `rtsp://localhost:8554/cam1` を OpenCV で開く
+- 最初のフレーム受信可否を確認する
+- 一定間隔でフレーム数、解像度、平均 FPS を表示する
+- 必要に応じてサンプル JPEG を保存する
+
+### セットアップ例
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements-wsl.txt
+```
+
+### 実行例
+
+```bash
+python3 scripts/read_rtsp_opencv.py
+python3 scripts/read_rtsp_opencv.py --max-frames 300
+python3 scripts/read_rtsp_opencv.py --save-dir tmp/frames --save-every 60
+```
+
+このスクリプトにより、WSL 側で RTSP が OpenCV から読める状態までを確認できる。
+
+---
+
+## 現時点の確認項目
+
+### Pi 側
+
+```bash
+sudo systemctl status rtsp-stream.service
+journalctl -u rtsp-stream.service -n 30 --no-pager
+```
+
+### Pi -> Windows への疎通
+
+```bash
+nc -vz -w 3 10.34.44.247 8554
+```
+
+### Windows 側
+
+```powershell
+netsh interface portproxy show all
+```
+
+### WSL 側
+
+```bash
+hostname -I
+ss -ltnp | grep 8554
+ffprobe -rtsp_transport tcp -v error -show_streams rtsp://localhost:8554/cam1
+ffplay rtsp://localhost:8554/cam1
+```
+
+---
+
+## ここまでで分かったこと
+
+- Pi 側カメラ入力は原状のUSBカメラでは動作が不安定取得できる
+ - Pi側でのdmesgコマンド及びvcgencmd get_throttledによると電圧異常は見られず，接触不良を考えられる
+- Pi 側の FFmpeg 送信は systemd サービスとして常駐化できた
+- Windows 側では `portproxy + firewall` が必須
+- WSL 側の MediaMTX は RTSP 受け口として利用できる
+- 起動補助用の `.bat` / `.sh` を用意することで、Windows から再現しやすくなった
+
+---
+
+## 次にやること
+
+次の実装候補は以下。
+
+- WSL 側で Python / OpenCV により `rtsp://localhost:8554/cam1` を読む
+- イベント抽出ワーカーの雛形を作る
+- 受信フレームに時刻を付けて保存する
+- 連絡帳向けのドラフト生成へ接続する
+
+---
+
+## 参照
+
+- `README.md`
+- `docs/architecture.md`
+- `docs/implementation-plan.md`
+- `メモや日記/2026-04-17.txt`
+
+Pi 側の細かい調整や途中の試行錯誤については、前の会話ログも参照する。

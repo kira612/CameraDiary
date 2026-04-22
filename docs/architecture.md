@@ -2,15 +2,123 @@
 
 ## 1. システムの狙い
 
-カメラ映像をそのまま保育記録にするのではなく、映像から抽出したイベントを連絡帳記入の補助情報に変換することを目的とします。
+本研究の最終出力は、**定点カメラの長尺動画から、各園児に対応する根拠付き自然文を 1 本ずつ生成すること**です。
 
-そのため、システムは次の 3 層に分けて考えるのが扱いやすいです。
+ここで重要なのは、設計の主語を `event` や `tracking` に固定しないことです。
 
-- 映像取得・配信層
-- 映像解析・イベント化層
-- 連絡帳下書き生成・確認層
+- 出力単位は `child-wise`
+- 中間表現の中心は `evidence`
+- `tracking` は有力な手段の一つ
+- 最後に evidence を園児ごとに束ねて自然文を生成する
 
-## 2. 論理アーキテクチャ
+したがって、本システムは「イベント抽出システム」でも「人物追跡システム」でもなく、**evidence-first な園児別連絡帳生成システム**として整理する。
+
+## 2. 層構造
+
+### 2.1 Ingest Layer
+
+役割:
+
+- RTSP 受信
+- フレーム抽出
+- タイムスタンプ付与
+- 長尺動画の分割や保存
+
+入力:
+
+- Raspberry Pi から送られる RTSP ストリーム
+- または録画済み長尺動画
+
+出力:
+
+- timestamp 付き frames
+- clips
+
+### 2.2 Evidence Extraction Layer
+
+役割:
+
+- diary-worthy な証拠候補の抽出
+- 人物、移動、静止、近接、エリア滞在、姿勢、相互作用などの候補化
+
+ここでは `tracking` も使うが、それ自体を最終目的にしない。
+
+候補:
+
+- person detection
+- person tracking
+- area occupancy
+- motion change
+- stillness
+- pairwise proximity
+- pose / interaction cues
+
+出力:
+
+- evidence candidates
+
+### 2.3 Child-wise Evidence Organization Layer
+
+役割:
+
+- evidence を園児単位へ束ねる
+- `track_id` をそのまま最終 `child_id` にしない
+- `temp_id` や手動補助を含めて束ねる
+
+ここで大切なのは、tracking 結果を一段抽象化して扱うこと。
+
+出力:
+
+- child-wise evidence bundles
+
+### 2.4 Multimodal Interpretation Layer
+
+役割:
+
+- clip
+- low-level observations
+- grouped evidence
+- 必要なら過去文脈
+
+をまとめて局所要約や意味解釈を生成する。
+
+ここでは VLM / LLM を使ってもよいが、入力は動画全体ではなく evidence に絞る。
+
+出力:
+
+- local multimodal summaries
+
+### 2.5 Diary Composition / Review Layer
+
+役割:
+
+- 園児 1 名につき 1 本の自然文を生成する
+- 文ごとに根拠区間を提示する
+- 保育士が修正し、確定する
+
+出力:
+
+- child-wise daily diary drafts
+- supporting evidence references
+- review status
+
+## 3. 全体フロー
+
+```text
+Frames
+  -> Evidence Candidates
+  -> Child-wise Evidence Bundles
+  -> Local Multimodal Summaries
+  -> Child-wise Daily Diary Drafts
+  -> Review UI
+```
+
+補足:
+
+- `Person Detection / Tracking` は `Evidence Candidates` の内部手段として位置づける
+- tracking が不安定でも、evidence bundle を中心にすれば設計全体は崩れにくい
+
+## 4. 論理アーキテクチャ
 
 ```text
 [Camera / Raspberry Pi]
@@ -18,208 +126,133 @@
     - 映像入力
     - RTSP 送信
 
-[Streaming Gateway]
+[Streaming Gateway / MediaMTX]
   role:
-    - MediaMTX で RTSP 受信
-    - 解析系ワーカーへの配信起点
+    - RTSP 受信
+    - downstream への配信起点
 
 [Ingest Worker]
   role:
-    - ストリーム読込
-    - フレーム間引き
-    - タイムスタンプ付与
+    - frame extraction
+    - timestamping
+    - clip segmentation
 
-[CV / Event Worker]
+[Evidence Extractor]
   role:
-    - 動作・領域ベースのイベント検出
-    - 園児単位またはエリア単位のイベント化
+    - detection / tracking / area / motion / proximity
+    - evidence candidate creation
 
-[Event Store]
+[Child-wise Grouper]
   role:
-    - event_type
-    - started_at / ended_at
-    - target_child
-    - confidence
-    - note
+    - evidence to child_temp_id assignment
+    - track bundle organization
 
-[Draft Generator]
+[Multimodal Summarizer]
   role:
-    - イベント列の整形
-    - 連絡帳向け文章の下書き生成
+    - clip-level interpretation
+    - evidence-level summary generation
+
+[Diary Composer]
+  role:
+    - child-wise daily text generation
+    - evidence-linked draft creation
 
 [Review UI]
   role:
-    - タイムライン確認
-    - 文面修正
-    - 保存確定
+    - child-wise draft review
+    - evidence inspection
+    - text correction / finalize
 ```
 
-## 3. 映像処理パイプライン
+## 5. データの考え方
 
-### 3.1 入力
+イベントは重要だが、唯一の中間表現ではない。中心は `evidence` と `child-wise grouping` に置く。
 
-- Raspberry Pi 上の USB カメラから映像取得
-- FFmpeg で H.264 に変換して RTSP 配信
-- MediaMTX が受信し、ローカル解析系に再配信
+### 5.1 observations
 
-### 3.2 受信
-
-- Python ワーカーが `rtsp://localhost:8554/cam1` を読む
-- すべてのフレームを処理せず、用途に応じて 1 fps から 5 fps 程度に間引く
-- 各フレームに `captured_at` を付与する
-
-### 3.3 前処理
-
-- 画像リサイズ
-- 解析対象エリアの切り出し
-- 明るさ補正や軽いノイズ低減
-
-### 3.4 イベント抽出
-
-最初は高精度モデルよりも、再現しやすいルールベースから始める方が妥当です。
-
-候補:
-
-- 特定領域への入室 / 退出
-- 机や食事エリアへの滞在開始 / 終了
-- 午睡エリアでの長時間静止
-- 遊びエリアごとの滞在時間集計
-
-将来的には次を検討します。
-
-- 物体検出モデル
-- 姿勢推定
-- 園児トラッキング
-- マルチカメラ統合
-
-## 4. 連絡帳生成フロー
-
-```text
-Frames
-  -> Event Candidates
-  -> Normalized Events
-  -> Child / Time Slot Aggregation
-  -> Prompt / Template Input
-  -> Diary Draft
-  -> Human Review
-```
-
-### 4.1 正規化イベント
-
-イベントは文章化しやすい形に揃えます。
+低レベル観測を扱う。
 
 例:
 
-- `play_started`
-- `play_ended`
-- `meal_started`
-- `meal_finished`
-- `nap_started`
-- `nap_ended`
-- `entered_area`
-- `left_area`
+- timestamp
+- bbox
+- area
+- motion score
+- stillness
+- near_people_count
+- pose_state
 
-連絡帳の頻出テーマに合わせて、MVP では次のカテゴリを優先します。
+### 5.2 evidence_segments
 
-- 食事:
-  - `meal_started`
-  - `meal_finished`
-  - `meal_area_seated`
-- お昼寝 / 排泄:
-  - `nap_started`
-  - `nap_ended`
-  - `toilet_prompted`
-- 遊び:
-  - `play_started`
-  - `play_focus_detected`
-  - `left_play_area`
-- 友だちとの関わり:
-  - `peer_interaction_detected`
-- 体調 / 注意事項:
-  - `health_attention_needed`
-
-### 4.2 下書き生成の考え方
-
-いきなり LLM に生の時系列を渡すのではなく、まずは機械的に整形します。
+文章生成に使う候補区間。
 
 例:
 
-```json
-{
-  "child_id": "child-a",
-  "date": "2026-04-17",
-  "events": [
-    {
-      "type": "play_started",
-      "label": "積み木遊びを開始",
-      "time": "09:20"
-    },
-    {
-      "type": "meal_started",
-      "label": "昼食を開始",
-      "time": "11:48"
-    }
-  ]
-}
-```
+- segment_id
+- start_at / end_at
+- theme
+- score
+- clip_ref
+- supporting observations
 
-この整形済みデータに対して、テンプレートまたは LLM を使って自然文へ変換します。
+### 5.3 child_groups
 
-## 5. データ保存方針
+園児ごとの束ね。
 
-MVP では、以下の 2 系統に分けて保存するのが安全です。
+例:
 
-- メタデータ
-  - イベント時刻
-  - エリア名
-  - 園児 ID
-  - 信頼度
-  - 手修正の履歴
-- 必要最小限の参照データ
-  - イベント前後数秒のクリップ
-  - 静止画サムネイル
+- child_temp_id
+- related_track_ids
+- related_segments
+- confidence
 
-生映像全量の長期保存は、運用負担とプライバシー負荷が大きいため、初期段階では避けます。
+### 5.4 diary_drafts
+
+最終出力。
+
+例:
+
+- child_temp_id
+- date
+- summary
+- generated_from_segments
+- review_status
 
 ## 6. 非機能要件
 
 ### 精度
 
-- 自動生成文は参考情報として扱う
-- 誤検出時に保育士がすぐ修正できることを優先する
-
-### レイテンシ
-
-- リアルタイム性は厳密でなくてよい
-- 数十秒から数分単位で更新されれば実運用上は十分な可能性が高い
+- 完全自動識別を前提にしない
+- 根拠区間を提示して、人が確認しやすいことを優先する
 
 ### 可観測性
 
-- ストリーム受信の成否
-- フレーム処理速度
-- イベント抽出数
-- 下書き生成数
+- stream ingest status
+- extracted evidence count
+- grouped child bundle count
+- local summary count
+- diary draft count
 
-は最低限ログとして残す
+をログとして残す
 
-### セキュリティ / プライバシー
+### プライバシー
 
-- 閲覧権限の分離
-- 保存期間の明示
-- 園児識別情報の最小化
-- 下書き確定前の自動生成文への注意表示
+- 生映像全量の長期保存は避ける
+- 必要最小限の clip / thumbnail / metadata を優先する
+- child-wise 出力でも個人識別の扱いは慎重に設計する
 
 ## 7. 既存検証との接続
 
 既に完了している内容:
 
-- Raspberry Pi から RTSP 配信
-- Windows + WSL2 上の MediaMTX 受信
-- `portproxy` と Windows Firewall の設定確認
+- Raspberry Pi からの RTSP 配信基盤
+- Windows + WSL2 + MediaMTX での受信
+- WSL 側で Python / OpenCV による RTSP 読み込み
 
 次に必要な内容:
 
-- Python による RTSP 受信ワーカー
-- イベントスキーマ定義
-- ダミーの連絡帳ドラフト生成器
-- 確認用の簡易 UI
+- evidence candidate 抽出
+- child-wise grouping
+- local multimodal summarization
+- child-wise diary generation
+- root evidence を見られる review UI

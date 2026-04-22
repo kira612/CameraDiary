@@ -1,164 +1,215 @@
 # Implementation Plan
 
-## 1. まず決めること
+## 1. 前提
 
-MVP を実装する前に、以下を固定します。
+本 repo の中心は、**定点カメラ長尺動画から園児ごとの根拠付き自然文を生成すること**です。
 
-- 対象人数: まずは 1 名または少人数に限定するか
-- 対象シーン: 遊び、食事、午睡のどれから始めるか
-- 識別方法: 個人識別をするか、まずはエリア単位の観測に留めるか
-- 出力形式: 連絡帳本文だけか、時系列イベント一覧も出すか
+したがって、実装順序も以下を守る。
 
-初手としては、以下の前提が現実的です。
+- 出力は `child-wise`
+- 設計思想は `evidence-first`
+- `tracking` は重要だが唯一の中心ではない
+- MVP でも「根拠付きの園児別文生成」まで入れる
 
-- 1 台のカメラ
-- 1 つの保育室
-- 個人識別はまだ強くやらない
-- まずはエリア滞在や時刻イベントを扱う
-- 連絡帳で頻出の `食事` `お昼寝` `遊び` を優先対象にする
+## 2. まず固定すること
 
-## 2. 推奨フェーズ
+- 対象は 1 台の定点カメラ長尺動画
+- 複数園児が写る前提
+- 完全自動個人識別は最初から要求しない
+- `track_id` と `child_id` は分けて扱う
+- 最終出力は `園児 1 名につき 1 本の自然文`
 
-### Phase 1: 配信基盤の固定
+## 3. 推奨フェーズ
 
-目的:
-
-- カメラ映像を安定受信できる状態を作る
-
-実施内容:
-
-- Raspberry Pi の ffmpeg 送信を常駐化
-- MediaMTX の起動方法を固定
-- 接続確認手順をスクリプト化
-
-成果物:
-
-- 起動手順
-- systemd ユニット
-- 動作確認コマンド
-
-### Phase 2: 受信ワーカー
+### Phase 1: Ingest 固定
 
 目的:
 
-- RTSP ストリームを Python から読めるようにする
+- 長尺動画または RTSP を安定して読み込める状態を作る
 
 実施内容:
 
-- OpenCV または PyAV で RTSP 読み込み
-- 定期サンプリング
-- タイムスタンプ付きフレーム保存
+- MediaMTX からの RTSP 受信
+- 長尺動画取り込み
+- frame extraction
+- timestamp 付与
 
 成果物:
 
-- `ingest_worker`
-- 設定ファイル
-- 受信ログ
+- ingest worker
+- clip export
+- ingest log
 
-### Phase 3: イベント抽出
+### Phase 2: Evidence Candidate Extraction
 
 目的:
 
-- 連絡帳に使える最小限のイベントを生成する
+- diary-worthy な証拠候補を動画全体から抽出する
 
 実施内容:
 
-- ROI 設定
-- 動体 / 滞在ベースのルール作成
-- イベントの開始・終了ロジック作成
-- `食事` `お昼寝` `遊び` の 3 テーマに対する観測項目を固定
+- person detection
+- tracking
+- area occupancy
+- motion / stillness
+- proximity / interaction candidate
+- theme score 付与
 
 成果物:
 
-- イベント JSON
-- イベント保存テーブル
+- evidence candidates
+- low-level observations
 
-### Phase 4: 下書き生成
+### Phase 3: Child-wise Grouping
 
 目的:
 
-- イベント列から読みやすい文章を作る
+- 候補区間を園児ごとに束ねる
 
 実施内容:
 
-- テンプレート生成
-- イベント欠損時のフォールバック
-- 保育士向けの編集前提 UI
-- 頻出テーマごとに、保護者向けの短い定型文パターンを用意
+- `track_id` を bundle 化
+- `child_temp_id` の導入
+- evidence_segment と child_group の関連付け
+- 必要なら手動補助の導線を残す
 
 成果物:
 
-- 連絡帳ドラフト
-- 生成理由の表示
+- child_groups
+- related evidence bundles
 
-### Phase 5: 評価
+### Phase 4: Local Summarization
 
 目的:
 
-- 実運用に耐えるかを確認する
+- evidence ごとの局所要約を作る
 
 実施内容:
 
-- 誤検出の種類を記録
-- 保育士の修正量を測定
-- 負担軽減効果を確認
+- clip + observation の入力整形
+- multimodal summary 生成
+- theme / confidence 付与
 
 成果物:
 
-- 精度評価メモ
-- 運用上の制約整理
+- local multimodal summaries
+- segment interpretation logs
 
-## 3. 技術選定のたたき台
+### Phase 5: Child-wise Diary Generation
 
-### 映像配信
+目的:
+
+- 園児 1 名につき 1 本の連絡帳文を生成する
+
+実施内容:
+
+- child-wise evidence bundle の整形
+- prompt / template 設計
+- root evidence を紐づけた draft 生成
+
+成果物:
+
+- child-wise daily diary drafts
+- generated_from_segments
+
+### Phase 6: Review / Evaluation
+
+目的:
+
+- 根拠区間付きで確認・修正できる状態を作る
+
+実施内容:
+
+- child-wise draft review UI
+- evidence inspection UI
+- 修正量 / 有用性 / 欠落の計測
+
+成果物:
+
+- reviewed drafts
+- evaluation memo
+
+## 4. MVP の定義
+
+MVP では、以下が満たされれば成立とする。
+
+- 1 台の定点カメラ長尺動画を読み込める
+- 動画中の複数園児について evidence 候補を抽出できる
+- 少なくとも一部の園児について evidence を束ねられる
+- 園児ごとに自然文を 1 本ずつ生成できる
+- 各文に対して対応する根拠区間を提示できる
+- 保育士が修正できる
+
+ここでは、全園児の完全自動識別までは要求しない。
+
+## 5. 技術選定のたたき台
+
+### Ingest / Streaming
 
 - Raspberry Pi
 - FFmpeg
 - MediaMTX
 
-この部分は既存検証をそのままベースにできます。
+### Vision / Evidence
 
-### 受信 / 解析
-
-- Python 3.11 以降
+- Python 3.11+
 - OpenCV
 - NumPy
 - 必要に応じて PyAV
+- 追跡や検出モデルは後段で追加
 
-### API / UI
+### Summarization / Composition
+
+- template-based generation
+- 必要に応じて VLM / LLM
+
+### UI / API
 
 - FastAPI
-- 軽量な HTML テンプレートまたは React
+- 軽量 UI
 
-ただし MVP 初期は、API + シンプルなサーバレンダリングで十分です。
-
-### 保存先
+### Storage
 
 - SQLite から開始
 
-保存対象:
+## 6. データモデル案
 
-- streams
-- events
-- diary_drafts
-- review_logs
-
-## 4. データモデルの初期案
-
-### events
+### observations
 
 ```json
 {
-  "id": "evt_001",
-  "stream_id": "cam1",
-  "child_id": null,
-  "event_type": "entered_area",
+  "id": "obs_001",
+  "timestamp": "2026-04-22T09:20:10+09:00",
+  "bbox": [120, 80, 260, 420],
   "area": "play_zone_a",
-  "started_at": "2026-04-17T09:20:10+09:00",
-  "ended_at": "2026-04-17T09:24:42+09:00",
-  "confidence": 0.81,
-  "source": "rule_based",
-  "note": "movement detected in play zone"
+  "motion_score": 0.73,
+  "near_people_count": 2,
+  "pose_state": "standing"
+}
+```
+
+### evidence_segments
+
+```json
+{
+  "segment_id": "seg_001",
+  "start_at": "2026-04-22T09:20:10+09:00",
+  "end_at": "2026-04-22T09:22:40+09:00",
+  "theme": "play",
+  "score": 0.84,
+  "clip_ref": "clips/seg_001.mp4",
+  "supporting_observations": ["obs_001", "obs_002"]
+}
+```
+
+### child_groups
+
+```json
+{
+  "child_temp_id": "child_tmp_01",
+  "related_track_ids": ["track_12", "track_17"],
+  "related_segments": ["seg_001", "seg_008"],
+  "confidence": 0.79
 }
 ```
 
@@ -167,52 +218,43 @@ MVP を実装する前に、以下を固定します。
 ```json
 {
   "id": "draft_001",
-  "child_id": "child_a",
-  "date": "2026-04-17",
-  "summary": "午前中は積み木遊びを中心に過ごし、昼食は落ち着いて食べ進める様子が見られました。",
-  "status": "draft",
-  "generated_from": ["evt_001", "evt_002"]
+  "child_temp_id": "child_tmp_01",
+  "date": "2026-04-22",
+  "summary": "午前中は積み木遊びに繰り返し取り組み、周囲の友だちと近い距離で遊ぶ様子が見られました。",
+  "generated_from_segments": ["seg_001", "seg_008"],
+  "review_status": "draft"
 }
 ```
 
-## 5. 直近タスク
+## 7. 直近タスク
 
-優先順位は次の通りです。
+1. ingest worker を安定化する
+2. evidence candidate を保存する最小データモデルを作る
+3. child_temp_id 単位で evidence を束ねる
+4. segment ごとの局所要約を作る
+5. child-wise draft を 1 本ずつ生成する
+6. 根拠区間付きで確認できる画面を作る
 
-1. RTSP を読む最小の Python スクリプトを作る
-2. フレーム取得結果をログに出す
-3. `食事` `お昼寝` `遊び` のいずれか 1 テーマでイベントを 1 つでも出せるようにする
-4. そのイベントから、保護者向けの定型文を返す
-5. Web 画面で確認できるようにする
+## 8. 成功条件
 
-## 6. 成功条件
+- 複数園児が写る長尺動画を ingest できる
+- 複数の evidence candidate を抽出できる
+- 少なくとも一部の園児について child-wise bundle を作れる
+- 園児ごとに 1 本ずつ自然文を生成できる
+- 生成文に対応する evidence を確認できる
 
-MVP が成立したと言える条件を先に定義します。
+## 9. 避けるべき設計
 
-- 30 分以上ストリームを安定受信できる
-- 少なくとも 1 種類のイベントを自動記録できる
-- そのイベントから日報文面の下書きを生成できる
-- 人が見て修正可能な形で提示できる
+### event-first に戻りすぎる設計
 
-## 7. 今のボトルネック
+- 「イベント抽出して文章化するシステム」
 
-- 個人識別を入れると難易度が急に上がる
-- 映像から直接「気持ち」や「様子」を決め打ちすると誤りやすい
-- 生映像保存を前提にするとプライバシー設計が重くなる
+これは狙いより狭い。
 
-したがって、初期段階では次を守るべきです。
+### tracking-first に固定しすぎる設計
 
-- 行動や時刻など観測可能な情報に限定する
-- 自動生成文は控えめな表現にする
-- 最終判断は保育士が行う前提にする
+- 「人物追跡して個人動画を作って要約するシステム」
 
-## 8. ユースケース更新の根拠
+これは手法を固定しすぎる。
 
-連絡帳支援のユースケース整理には、以下の記事を参考にしました。
-
-- 保育のひきだし「もう悩まない！保育士が知りたい『連絡帳を書くコツ』と『使える例文』」
-  - 食事・おやつ
-  - お昼寝・排泄
-  - 遊び
-  - 友だちとの関わり / トラブル / 成長
-  - 体調の変化や怪我
+本 repo は、**child-wise output / evidence-first design** を基本にする。

@@ -1,0 +1,129 @@
+# 2026-04-22 設計メモ
+
+## 今日やったこと
+
+今日は実装の追加よりも、**研究スコープの整理** と **repo の主語変更** を行った。
+
+既存の配信基盤や WSL / Pi のセットアップ内容は前日の設計メモに記録済みなので、ここでは重複させない。
+
+---
+
+## 1. 研究スコープの整理
+
+今日のすり合わせで、研究の中心を次の文で固定した。
+
+**定点カメラで撮影された長尺保育動画から、映像中の各園児に対応する証拠区間を抽出・整理し、園児ごとに根拠付きの自然な連絡帳文を 1 本ずつ自動生成する。**
+
+この整理で重要なのは次の点。
+
+- 出力は `動画 1 本に対して 1 文` ではない
+- 出力は `園児ごとに 1 本ずつの自然文`
+- 文章生成時には `根拠区間` を保持する
+- `event` も `tracking` も目的ではなく手段
+
+---
+
+## 2. repo の主語変更
+
+これまでの repo は、説明上どうしても `event extraction -> text generation` に寄っていた。
+
+今日の修正では、repo の中心を次のように置き換えた。
+
+- `event-first` ではなく `evidence-first`
+- `tracking-first` でもない
+- repo の主語は `diary generation`
+- 中間表現の中心は `evidence`
+- 出力単位は `child-wise`
+
+つまり、設計としては次の考え方を採用する。
+
+- 出力単位は `child-wise`
+- 設計思想は `evidence-first`
+- `tracking` は有力手段だが唯一の中心ではない
+- `event`、`tracking`、`VLM` はすべて最終出力のための手段
+
+---
+
+## 3. ドキュメントの修正内容
+
+### README
+
+以下を修正した。
+
+- プロジェクトの冒頭説明
+- 目標
+- 設計方針
+- 全体構成
+- MVP
+- 次の一歩
+
+README の中心文は、`園児ごとの根拠付き自然文生成` に合わせて更新した。
+
+### architecture
+
+`docs/architecture.md` を `event-first` な説明から置き換えた。
+
+層構造は次の 5 層に整理した。
+
+1. Ingest Layer
+2. Evidence Extraction Layer
+3. Child-wise Evidence Organization Layer
+4. Multimodal Interpretation Layer
+5. Diary Composition / Review Layer
+
+フロー図も次の形に更新した。
+
+```text
+Frames
+  -> Evidence Candidates
+  -> Child-wise Evidence Bundles
+  -> Local Multimodal Summaries
+  -> Child-wise Daily Diary Drafts
+  -> Review UI
+```
+
+### implementation plan
+
+`docs/implementation-plan.md` も、MVP とフェーズを `child-wise output` に合わせて修正した。
+
+特に以下を反映した。
+
+- MVP でも `園児別文生成 + 根拠提示` まで入れる
+- `child_groups` を明示的に置く
+- `observations -> evidence_segments -> child_groups -> diary_drafts` というデータモデルに変更
+
+### research scope
+
+新規に `docs/research-scope.md` を追加した。
+
+このファイルでは、以下を短く固定した。
+
+- 研究の中心文
+- repo の設計原則
+- 最初から入れるもの
+- 最初からは入れないもの
+- なぜ `event-first` でも `tracking-first` でもないのか
+
+---
+
+## 4. 今日の結論
+
+今日の変更で、repo 全体の立ち位置は次のように整理できた。
+
+- 最終出力は `child-wise`
+- 設計思想は `evidence-first`
+- `tracking` は重要だが固定しない
+- repo の主語は `event extraction` ではなく `diary generation`
+- MVP でも `根拠付きの園児別文生成` を目標にする
+
+---
+
+## 5. 参照
+
+- `README.md`
+- `docs/architecture.md`
+- `docs/implementation-plan.md`
+- `docs/research-scope.md`
+- `メモや日記/2026-04-21.txt`
+
+配信基盤、WSL / Pi、MediaMTX、OpenCV 受信、systemd 常駐化などの実装メモは前日の設計メモを参照する。
