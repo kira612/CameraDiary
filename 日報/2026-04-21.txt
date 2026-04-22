@@ -277,6 +277,6 @@ ffplay rtsp://localhost:8554/cam1
 - `README.md`
 - `docs/architecture.md`
 - `docs/implementation-plan.md`
-- `メモや日記/2026-04-17.txt`
+- `日報/2026-04-17.txt`
 
 Pi 側の細かい調整や途中の試行錯誤については、前の会話ログも参照する。

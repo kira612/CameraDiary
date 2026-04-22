@@ -124,6 +124,6 @@ Frames
 - `docs/architecture.md`
 - `docs/implementation-plan.md`
 - `docs/research-scope.md`
-- `メモや日記/2026-04-21.txt`
+- `日報/2026-04-21.txt`
 
 配信基盤、WSL / Pi、MediaMTX、OpenCV 受信、systemd 常駐化などの実装メモは前日の設計メモを参照する。

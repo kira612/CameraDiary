@@ -114,7 +114,7 @@ pip install -r requirements-wsl.txt
 python3 scripts/read_rtsp_opencv.py --max-frames 300
 ```
 
-詳細な配信メモは [メモや日記/2026-04-17.txt](./メモや日記/2026-04-17.txt) を参照してください。
+詳細な配信メモは [日報/2026-04-17.txt](./日報/2026-04-17.txt) を参照してください。
 
 ## ドキュメント
 
