@@ -91,11 +91,11 @@ USB Camera
 
 - [scripts/start_mediamtx_wsl.bat](./scripts/start_mediamtx_wsl.bat)
   - Windows から WSL 上の `MediaMTX` を起動するためのバッチファイル
-  - 既定の起動先は `/home/kirataiki/apps/mediamtx`
+  - 既定の起動先は `/home/kirataiki/apps/vendor/mediamtx/mediamtx`
   - 使い方:
     - `scripts\start_mediamtx_wsl.bat`
     - `scripts\start_mediamtx_wsl.bat Ubuntu`
-    - `scripts\start_mediamtx_wsl.bat Ubuntu /home/kirataiki/apps/mediamtx`
+    - `scripts\start_mediamtx_wsl.bat Ubuntu /home/kirataiki/apps/vendor/mediamtx/mediamtx /home/kirataiki/apps/config/mediamtx.yml`
 - [scripts/read_rtsp_opencv.py](./scripts/read_rtsp_opencv.py)
   - WSL 側で `rtsp://localhost:8554/cam1` を OpenCV で読む最小受信スクリプト
   - 使い方:
@@ -114,13 +114,27 @@ pip install -r requirements-wsl.txt
 python3 scripts/read_rtsp_opencv.py --max-frames 300
 ```
 
-詳細な配信メモは [日報/2026-04-17.txt](./日報/2026-04-17.txt) を参照してください。
+詳細な配信メモは [docs/daily/2026-04-17.txt](./docs/daily/2026-04-17.txt) を参照してください。
+
+## ディレクトリ構成
+
+```text
+.
+├── config/              # 実行時設定
+├── docs/                # 設計、計画、検証メモ
+│   └── daily/           # 日報・作業ログ
+├── scripts/             # 開発・検証用スクリプト
+│   └── pi/              # Raspberry Pi 側セットアップ
+└── vendor/              # 外部配布物とローカル検証用バイナリ
+```
 
 ## ドキュメント
 
+- [docs/README.md](./docs/README.md): ドキュメント一覧
 - [docs/architecture.md](./docs/architecture.md): システム構成と処理フロー
 - [docs/implementation-plan.md](./docs/implementation-plan.md): 実装方針、フェーズ、直近タスク
 - [docs/research-scope.md](./docs/research-scope.md): 研究スコープと設計原則
+- [docs/daily/](./docs/daily/): 日報・検証ログ
 
 ## 重要な注意点
 
